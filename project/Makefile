@@ -21,8 +21,6 @@ SEQUENTIAL_SRC := $(shell find $(SRC_DIRS) -name '*.c') # $(SRC_DIRS)/sequential
 SEQUENTIAL_SRC := $(SEQUENTIAL_SRC:%=$(BUILD_DIR)/%.o)
 
 
-
-
 # Every folder in ./src will need to be passed to GCC so that it can find header files
 INC_DIRS := $(shell find $(SRC_DIRS) -type d)
 # Add a prefix to INC_DIRS. So moduleA would become -ImoduleA. GCC understands this -I flag
@@ -61,6 +59,20 @@ $(BUILD_DIR)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+build_v1:
+	@mkdir -p $(BUILD_DIR)
+	@echo "    $(GREEN)Building V1 CUDA binary...$(NC)"
+	@$(NVCC) -o $(BUILD_DIR)/v1.out $(SRC_DIRS)/gpu_1t_per_moment.cu
+	@echo "    $(GREEN)Build finished successfully!$(NC)"
+	@echo
+
+run_v1:
+	@rm -f *.out
+	@sbatch deploy_v1.sh
+	@sleep 2
+	@echo
+	@echo
+	@tail -n +1 *.out
 
 .PHONY: clean
 clean:
