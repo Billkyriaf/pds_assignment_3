@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdbool.h>
+#include <limits.h>
 #include <cuda.h>
 
-#define N 2
+#define N 30
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -110,39 +112,142 @@ void printArray(short int **arr){
     printf("\n\n\n");
 }
 
+/**
+ * Prints an 1D array like a 2D array for every size + 2 elements
+ * 
+ * @param arr   The array to print
+ * @param size  The size of the single row without wrapping
+ */
+__device__ void printDeviceArray(short int *arr, int size){
 
+    for (int i = 0; i < size + 2; i++) {
+        for(int j = 0; j < size + 2; j++){
 
+            if (arr[i * (size + 2) + j] < 0){
+                printf("%hd ", arr[i * (size + 2) + j]);
+        
+            } else {
+                printf(" %hd ", arr[i * (size + 2) + j]);
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+/**
+ * Sign function implementation
+ * 
+ * @param sum The sum to find the sign
+ * 
+ * @return 1 if the sun is greater than 0 else -1
+ * 
+ */
 __device__ short int sign(short int sum){
     return sum > 0 ? 1 : -1;
 }
 
-__global__ void simulateIsing(short int *arr1, short int *arr2, int iterations, int size){
-    
-    // Used for switching roles between the two arrays
-    short int *read = arr1;
-    short int *write = arr2;
 
+/**
+ * Finds the sum of all the elements of an 1D array
+ * 
+ * @param arr   The array to find the sum
+ * @param size  The size of the single row of the 2D array without wrapping
+ * 
+ * @return The sum of all the elements of the array
+ */ 
+__device__ int summation(short int *arr, int size){
+    
+    int sum = 0;
+    
+    for (int i = 0; i < (size + 2) * (size + 2); i++){
+        sum += arr[i];
+    }
+
+    return sum;
+}
+
+
+/**
+ * Kernel function that simulates the ising model. The function runs for a number of iterations and breaks if a stable state is reached.
+ * 
+ * @param d_read       The initial array
+ * @param d_write      A copy of the initial array in which data are written to
+ * @param size         The size of the single row of the 2D array without wrapping
+ * @param iterations   The maximum number of iterations to run
+ */ 
+__global__ void simulateIsing(short int *d_read, short int *d_write, int size, int iterations){
+    
+    // if (threadIdx.x == 0) {
+    //     printDeviceArray(d_read, size);
+    // }
+    
+    // This array is shared among all the threads and is used for detecting steady state 
+    __shared__ int previous_sum[3];
+    
+    // The first thread initializes the array
     if (threadIdx.x == 0) {
-        for (int i = 0; i < (size + 2) * (size + 2) ; i++) {
-            printf("%hd ", read[i]);
-        }
-        printf("\n\n");
+        previous_sum[0] = summation(d_read, size);  // Initial sum
+        previous_sum[1] = INT_MAX - 1;  // Random value for initializing
+        previous_sum[2] = INT_MAX - 2;  // Random value for initializing
     }
     
-    
-    // Index for the flatted out 2D array
-    int index = size + 3 + threadIdx.x + 2 * threadIdx.x / size;
+    // Run the simulation....
+    for(int iteration = 0; iteration < iterations; iteration++){
 
-    // Calculate the new spin for each point
-    int sum = read[index - 1] + read[index + 1] + read[index - (size + 2)] + read[index + (size + 2)] + read[index];
+        // Index for the flatted out 2D array. This formula is explained in the report.
+        int index = size + 3 + threadIdx.x + (threadIdx.x / size) * 2;
 
-    write[index] = sign(sum);
+        // Calculate the new spin for each point
+        int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
 
-    // Synchronise the threads
-    __syncthreads();
+        d_write[index] = sign(sum);  // Update the value of this moment
 
-    read = arr2;
-    write = arr1;
+        // Synchronise the threads here because the wrappings need the complete array
+        __syncthreads();
+
+        if(threadIdx.x == 0){
+            // Update the wrapping rows...
+            for (int j = 1; j <= N; j++){
+                d_write[size * (size + 2) + size + 2 + j] = d_write[size + 2 + j];  // This formula transforms 2D coordinates to 1D
+                d_write[size * (size + 2) + j - size * (size + 2)] = d_write[size * (size + 2) + j];  // This formula transforms 2D coordinates to 1D
+            }
+        }
+        
+        if(threadIdx.x == size){
+            // ... and columns as well
+            for (int i = 1; i <= N; i++){
+                d_write[i * (size + 2) + 1 + size] = d_write[i * (size + 2) + 1];  // This formula transforms 2D coordinates to 1D
+                d_write[i * (size + 2)] = d_write[i * (size + 2) + size];  // This formula transforms 2D coordinates to 1D
+            }
+        }
+
+        // Synchronise the threads here because the summation function needs the complete array
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+            // Find the sum and save it to the iteration % 3 index. This index takes the values 0, 1, 2, 0, 1, 2 ....
+            previous_sum[iteration % 3] = summation(d_write, size);
+
+            printf("Iteration: %d, energy %d\n", iteration, previous_sum[iteration % 3]);
+        }
+
+
+        // Synchronise threads here because all threads need the previous_sum values calculated above
+        __syncthreads();
+
+
+        // If two sums that are 1 iteration apart are equal, a steady state has been reached
+        if (previous_sum[0] == previous_sum[2]) {
+            break;
+        }
+
+
+        // Swap the two arrays.
+        short int *tmp = d_write;
+        d_write = d_read;
+        d_read = tmp;
+    }   
 }
 
 int main(int argc, char **argv){
@@ -161,28 +266,37 @@ int main(int argc, char **argv){
         array2[i] = (short int *) calloc ((N + 2), sizeof(short int));
     }
 
+    // Device memory pointers
     short int *d_array1;
     short int *d_array2;
 
+
+    // Allocate the memory for the device arrays
     cudaMalloc((void**)&d_array1, sizeof(short int) * (N + 2) * (N + 2));
     cudaMalloc((void**)&d_array2, sizeof(short int) * (N + 2) * (N + 2));
 
+    // Initialize the array 1 with random -1 and 1 values (50% distribution)
     initializeArray(array1);
-    printArray(array1);
 
+
+    // Copy the host memory to the device memory. This transfer also converts the host 2D array to 1D for the device
     for (int i = 0; i < N + 2; i++) {
         cudaMemcpy(d_array1 + i * (N + 2), array1[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
         cudaMemcpy(d_array2 + i * (N + 2), array2[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
     }
     
-    simulateIsing <<<1, N * N>>> (d_array1, d_array2, 10, N);
+    // Call the kernel with 1 block and N^2 threads. This call introduces a restriction on the size of the array
+    // The max number of threads per block is 1024 so the max N is theoreticaly 32 (practicaly 30 because of the wrappings)
+    simulateIsing <<<1, N * N>>> (d_array1, d_array2, N, 500000);
 
+
+    // Copy the device memory back to host again converting from 1D device array to 2D host array
     for (int i = 0; i < N + 2; i++) {
         cudaMemcpy(array1[i], d_array1 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
         cudaMemcpy(array2[i], d_array2 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
     }
 
-    printArray(array1);
+    
 
     // free memory
     for (int i = 0; i < N + 2; i++){
@@ -193,5 +307,8 @@ int main(int argc, char **argv){
     free(array1);
     free(array2);
     
+    cudaFree(d_array1);
+    cudaFree(d_array2);
+
     return 0;
 }
