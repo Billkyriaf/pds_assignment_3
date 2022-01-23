@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <limits.h>
 
-#define N 8
+#define N 30
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -39,10 +40,10 @@ void initializeArray(short int **arr){
     for (int i = 1; i <= N; i++){
         for (int j = 1; j <= N; j++){
 
-            double rnd = (double) rand() / RAND_MAX;  // Get a double random number in (0,1) range
+            int rnd = rand() % 100;  // Get a double random number in (0,1) range
             
             // 0.5 is chosen so that +1 and -1 are 50% each
-            if (rnd > 0.5){
+            if (rnd >= 50){
 
                 // positive spin
                 arr[i][j] = 1;  
@@ -113,13 +114,28 @@ short int sign(short int sum){
     return sum > 0 ? 1 : -1;
 }
 
-void simulateIsing(short int **arr1, short int **arr2, int iterations){
+int summation(short int **arr){
     
-    // Used for switching roles between the two arrays
-    short int **read = arr1;
-    short int **write = arr2;
+    int sum = 0;
+    
+    for (int i = 1; i <= N; i++){
+        for (int j = 1; j <= N; j++){
+            sum += arr[i][j];
+        }
+    }
 
-    for (int iteration = 1; iteration <= iterations; iteration++){
+    return sum;
+}
+
+void simulateIsing(short int **read, short int **write, int iterations){
+
+    int previous_sum[3] = {INT_MAX, INT_MAX - 1, INT_MAX - 2};
+    previous_sum[0] = summation(read);
+
+    printf("Initial summation %d\n", previous_sum[0]);
+    // printArray(read);
+
+    for (int iteration = 0; iteration < iterations; iteration++){
         // For every row...
         for (int i = 1; i <= N; i++){
             // ... and every column
@@ -145,11 +161,19 @@ void simulateIsing(short int **arr1, short int **arr2, int iterations){
             write[i][0] = write[i][N];
         }
 
-        printf("Iteration: %d\n", iteration);
-        printArray(write);
+        previous_sum[iteration % 3] = summation(write);
+
+        printf("Iteration: %d, summation %d\n", iteration, previous_sum[iteration % 3]);
+        // printArray(write);
+
+        if (previous_sum[0] == previous_sum[2]) {
+            break;
+        }
         
-        read = arr2;
-        write = arr1;
+        
+        short int **tmp = read;
+        read = write;
+        write = tmp;
     }
 }
 
@@ -171,9 +195,9 @@ int main(int argc, char **argv){
     }
 
     initializeArray(array1);
-    printArray(array1);
+    // printArray(array1);
 
-    simulateIsing(array1, array2, 10);
+    simulateIsing(array1, array2, 10000);
 
     // free memory
     for (int i = 0; i < N + 2; i++){
