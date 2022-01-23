@@ -29,7 +29,7 @@ INC_FLAGS := $(addprefix -I,$(INC_DIRS))
 CFLAGS := $(INC_FLAGS) -O3
 
 
-all: pre_build build_sequential post_build
+sequential: pre_build build_sequential post_build
 
 pre_build:
 	@echo "$(GREEN)Building all...$(NC)"
@@ -47,32 +47,39 @@ build_sequential: $(SEQUENTIAL_SRC)
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
-run_sequential: all
-	@rm -f *.out
-	@sbatch deploy.sh
-	@sleep 2
+run_sequential: sequential
+	@rm -f *.out         # remove the previous slurm-*.out file 
+	@sbatch deploy.sh    # queue the next job
+	@sleep 2             # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
-	@tail -n +1 *.out
+	@timeout 5 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+
 
 $(BUILD_DIR)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-build_v1:
+
+######## V1 One moment per thread and singl3 block  ########
+
+single_block: pre_build build_single_block post_build
+
+
+build_single_block:
 	@mkdir -p $(BUILD_DIR)
-	@echo "    $(GREEN)Building V1 CUDA binary...$(NC)"
-	@$(NVCC) -o $(BUILD_DIR)/v1.out $(SRC_DIRS)/gpu_1t_per_moment.cu
+	@echo "    $(GREEN)Building single block CUDA binary...$(NC)"
+	@$(NVCC) -o $(BUILD_DIR)/single_block.out $(SRC_DIRS)/gpu_1t_per_moment.cu
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
-run_v1:
-	@rm -f *.out
-	@sbatch deploy_v1.sh
-	@sleep 2
+run_single_block: single_block
+	@rm -f *.out                     # remove the previous slurm-*.out file 
+	@sbatch deploy_single_block.sh   # queue the next job
+	@sleep 2                         # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
-	@tail -n +1 *.out
+	@timeout 5 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 .PHONY: clean
 clean:

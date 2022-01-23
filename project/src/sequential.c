@@ -5,61 +5,80 @@
 #define N 8
 
 /**
- * @brief Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
+ * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
  * 
  * In order to avoid checking for conditions in the parallel section of the program regarding the array limits the array is expanded by 2 on both 
  * dimensions.
  * 
  *      e.g.
  * 
- *      
+ *          This is the initial 3x3 array:      The array created has is (3 + 2)x(3 + 2) and is the following:
  * 
- * @param arr The array that should be initialized
+ *                  0   1   2                                        0   1   2   3   4
+ *                ┌───┬───┬───┐                                    ┌───┬───┬───┬───┬───┐
+ *             0  │ 0 │ 1 │ 2 │                                 0  │ x │ 6 │ 7 │ 8 │ x │
+ *                ├───┼───┼───┤                                    ├───┼───┼───┼───┼───┤
+ *             1  │ 3 │ 4 │ 5 │                                 1  │ 2 │ 0 │ 1 │ 2 │ 0 │
+ *                ├───┼───┼───┤                                    ├───┼───┼───┼───┼───┤
+ *             2  │ 6 │ 7 │ 8 │                                 2  │ 5 │ 3 │ 4 │ 5 │ 3 │
+ *                └───┴───┴───┘                                    ├───┼───┼───┼───┼───┤
+ *                                                              3  │ 8 │ 6 │ 7 │ 8 │ 7 │
+ *                                                                 ├───┼───┼───┼───┼───┤
+ *                                                              4  │ x │ 0 │ 1 │ 2 │ x │
+ *                                                                 └───┴───┴───┴───┴───┘
+ * 
+ *          In the matrix created 0 has it's neighbors next to it with 2 and 6 wrapping around. The x values are not used.
+ * 
+ * 
+ * @param arr The pointer to the array that is being initialized
  */
 void initializeArray(short int **arr){
     srand(time(NULL));
 
-    for(int i = 1; i <= N; i++){
-        for(int j = 1; j <= N; j++){
+    // i and j start from 1 because the initial array is surrounded by the wrapping rowns and columns
+    for (int i = 1; i <= N; i++){
+        for (int j = 1; j <= N; j++){
+
             double rnd = (double) rand() / RAND_MAX;  // Get a double random number in (0,1) range
-
+            
+            // 0.5 is chosen so that +1 and -1 are 50% each
             if (rnd > 0.5){
+
+                // positive spin
                 arr[i][j] = 1;  
-                
-                // Wrap around for rows: periodic boundary conditions
-                if (i == 1){
-                    arr[N + 1][j] = arr[1][j];
-
-                } else if (i == N){
-                    arr[0][j] = arr[N][j];
-                }
-                
-                // Wrap around for cols: periodic boundary conditions
-                if (j == 1){
-                    arr[i][N + 1] = arr[i][1];
-
-                } else if (j == N){
-                    arr[i][0] = arr[i][N];
-                }
                                 
             } else {
+
+                // negatine spin
                 arr[i][j] = -1;
+            }
 
-                // Wrap around for rows: periodic boundary conditions
-                if (i == 1){
-                    arr[N + 1][j] = arr[1][j];
+            // Wrap around for rows: periodic boundary conditions
+            if (i == 1){
 
-                } else if (i == N){
-                    arr[0][j] = arr[N][j];
-                }
+                // If i == 1 it means that this is the 0 row of the initial array and must be wrapped
+                // to the row N - 1 of the final array (see the example above)
+                arr[N + 1][j] = arr[1][j];
+
+            } else if (i == N){
+
+                // If i == N it means that this is the N - 1 row of the initial array and must be wrapped
+                // to the row 0 of the final array (see the example above)
+                arr[0][j] = arr[N][j];
+            }
                 
-                // Wrap around for cols: periodic boundary conditions
-                if (j == 1){
-                    arr[i][N + 1] = arr[i][1];
+            // Wrap around for cols: periodic boundary conditions
+            if (j == 1){
 
-                } else if (j == N){
-                    arr[i][0] = arr[i][N];
-                }
+                // If j == 1 it means that this is the 0 col of the initial array and must be wrapped
+                // to the col N - 1 of the final array (see the example above)
+                arr[i][N + 1] = arr[i][1];
+
+            } else if (j == N){
+
+                // If j == N it means that this is the N - 1 col of the initial array and must be wrapped
+                // to the col 0 of the final array (see the example above)
+                arr[i][0] = arr[i][N];
             }
         }
     }
@@ -67,22 +86,26 @@ void initializeArray(short int **arr){
 
 
 /**
- * @brief Prints an array 
+ * @brief Prints a 2D array 
  * 
- * @param arr The array that should be printed
+ * @param arr The array to print
  */
 void printArray(short int **arr){
-    for(int i = 0; i < N + 2; i++){
-        for(int j = 0; j < N + 2; j++){
-            if(arr[i][j] < 0) {
+
+    for (int i = 0; i < N + 2; i++){
+        for (int j = 0; j < N + 2; j++){
+            
+            if (arr[i][j] < 0){
                 printf("%hd ", arr[i][j]);
-            }
-            else {
+            
+            } else {
                 printf(" %hd ", arr[i][j]);
             }
         }
+
         printf("\n");
     }
+
     printf("\n\n\n");
 }
 
