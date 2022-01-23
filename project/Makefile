@@ -53,7 +53,7 @@ run_sequential: sequential
 	@sleep 2             # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
-	@timeout 5 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 
 $(BUILD_DIR)/%.c.o: %.c
@@ -79,7 +79,7 @@ run_single_block: single_block
 	@sleep 2                         # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
-	@timeout 5 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+	@timeout 15 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 .PHONY: clean
 clean:
