@@ -42,10 +42,10 @@ void initializeArray(short int **arr){
     for (int i = 1; i <= N; i++){
         for (int j = 1; j <= N; j++){
 
-            double rnd = (double) rand() / RAND_MAX;  // Get a double random number in (0,1) range
+            int rnd = rand() % 1000;  // Get a double random number in (0,1) range
             
             // 0.5 is chosen so that +1 and -1 are 50% each
-            if (rnd > 0.5){
+            if (rnd > 500){
 
                 // positive spin
                 arr[i][j] = 1;  

@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdbool.h>
 #include <limits.h>
+#include <cuda.h>
 
-#define N 10000
+#define N 30
+#define N_THREADS 32
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -40,10 +43,10 @@ void initializeArray(short int **arr){
     for (int i = 1; i <= N; i++){
         for (int j = 1; j <= N; j++){
 
-            int rnd = rand() % 100;  // Get a double random number in (0,1) range
+            int rnd = rand() % 1000;  // Get a double random number in (0,1) range
             
             // 0.5 is chosen so that +1 and -1 are 50% each
-            if (rnd >= 50){
+            if (rnd > 500){
 
                 // positive spin
                 arr[i][j] = 1;  
@@ -110,73 +113,104 @@ void printArray(short int **arr){
     printf("\n\n\n");
 }
 
-short int sign(short int sum){
+/**
+ * Prints an 1D array like a 2D array for every size + 2 elements
+ * 
+ * @param arr   The array to print
+ * @param size  The size of the single row without wrapping
+ */
+__device__ void printDeviceArray(short int *arr, int size){
+
+    for (int i = 0; i < size + 2; i++) {
+        for(int j = 0; j < size + 2; j++){
+
+            if (arr[i * (size + 2) + j] < 0){
+                printf("%hd ", arr[i * (size + 2) + j]);
+        
+            } else {
+                printf(" %hd ", arr[i * (size + 2) + j]);
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+/**
+ * Sign function implementation
+ * 
+ * @param sum The sum to find the sign
+ * 
+ * @return 1 if the sun is greater than 0 else -1
+ * 
+ */
+__device__ short int sign(short int sum){
     return sum > 0 ? 1 : -1;
 }
 
-int summation(short int **arr){
+
+/**
+ * Finds the sum of all the elements of an 1D array
+ * 
+ * @param arr   The array to find the sum
+ * @param size  The size of the single row of the 2D array without wrapping
+ * 
+ * @return The sum of all the elements of the array
+ */ 
+__device__ int summation(short int *arr, int size){
     
     int sum = 0;
     
-    for (int i = 1; i <= N; i++){
-        for (int j = 1; j <= N; j++){
-            sum += arr[i][j];
-        }
+    for (int i = 0; i < (size + 2) * (size + 2); i++){
+        sum += arr[i];
     }
 
     return sum;
 }
 
-void simulateIsing(short int **read, short int **write, int iterations){
 
-    int previous_sum[3] = {INT_MAX, INT_MAX - 1, INT_MAX - 2};
-    previous_sum[0] = summation(read);
+/**
+ * Kernel function that simulates the ising model. The function runs for a number of iterations and breaks if a stable state is reached.
+ * 
+ * @param d_read       The initial array
+ * @param d_write      A copy of the initial array in which data are written to
+ * @param size         The size of the single row of the 2D array without wrapping
+ * @param iterations   The maximum number of iterations to run
+ */ 
+__global__ void simulateIsing(short int *d_read, short int *d_write, int size, int iterations){
 
-    printf("Initial summation %d\n", previous_sum[0]);
-    // printArray(read);
+    for(int i = 0; i < iterations; i++){
 
-    for (int iteration = 0; iteration < iterations; iteration++){
-        // For every row...
-        for (int i = 1; i <= N; i++){
-            // ... and every column
-            for (int j = 1; j <= N; j++){
-                
-                // Calculate the new spin for each point
-                int sum = read[i-1][j] + read[i][j-1] + read[i][j] + read[i+1][j] + read[i][j+1];
+        int x = blockIdx.x * blockDim.x + threadIdx.x; // consider that the threads take continuous ids without considering the change of the block id.
 
-                write[i][j] = sign(sum);
-            }
+        // Index for the flatted out 2D array. This formula is explained in the report.
+        int index = size + 3 + x + (x / size) * 2;  
+
+        // If the total number of threads is enough for all the N * N elements of the array, calculate their new moments.
+        if((index <= (size + 1) * (size  + 2) - 2){
+            int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
+
+            d_write[index] = sign(sum);  // Update the value of this moment
         }
-
-
-        // Update the wrapping rows...
-        for (int j = 1; j <= N; j++){
-            write[N + 1][j] = write[1][j];
-            write[0][j] = write[N][j];
-        }
-
-        // ... and columns as well
-        for (int i = 1; i <= N; i++){
-            write[i][N + 1] = write[i][1];
-            write[i][0] = write[i][N];
-        }
-
-        previous_sum[iteration % 3] = summation(write);
-
-        printf("Iteration: %d, summation %d\n", iteration, previous_sum[iteration % 3]);
-        // printArray(write);
-
-        if (previous_sum[0] == previous_sum[2]) {
-            break;
-        }
-        
-        
-        short int **tmp = read;
-        read = write;
-        write = tmp;
     }
 }
 
+__global__ void completeWrapping(int *d_write, int size){
+    
+    int j = blockIdx.x * blockDim.x + threadIdx.x + 1;
+
+    if(j <= size){
+
+        // Update the wrapping rows...
+        d_write[size * (size + 2) + size + 2 + j] = d_write[size + 2 + j];  // This formula transforms 2D coordinates to 1D
+        d_write[size * (size + 2) + j - size * (size + 2)] = d_write[size * (size + 2) + j];  // This formula transforms 2D coordinates to 1D
+        
+        
+        // ... and columns as well
+        d_write[j * (size + 2) + 1 + size] = d_write[j * (size + 2) + 1];  // This formula transforms 2D coordinates to 1D
+        d_write[j * (size + 2)] = d_write[j * (size + 2) + size];  // This formula transforms 2D coordinates to 1D
+    }
+}
 
 int main(int argc, char **argv){
 
@@ -194,10 +228,55 @@ int main(int argc, char **argv){
         array2[i] = (short int *) calloc ((N + 2), sizeof(short int));
     }
 
-    initializeArray(array1);
-    // printArray(array1);
+    // Device memory pointers
+    short int **d_array1;
+    short int **d_array2;
 
-    simulateIsing(array1, array2, 10000);
+
+    // Allocate the memory for the device arrays
+    cudaMalloc((void**)&d_array1, sizeof(short int) * (N + 2) * (N + 2));
+    cudaMalloc((void**)&d_array2, sizeof(short int) * (N + 2) * (N + 2));
+
+    // Initialize the array 1 with random -1 and 1 values (50% distribution)
+    initializeArray(array1);
+
+
+    // Copy the host memory to the device memory. This transfer also converts the host 2D array to 1D for the device
+    for (int i = 0; i < N + 2; i++) {
+        cudaMemcpy(d_array1 + i * (N + 2), array1[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_array2 + i * (N + 2), array2[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
+    }
+    
+    int numberOfBlocks;
+
+    if((N * N) % N_THREADS == 0){
+        numberOfBlocks = (N * N) / N_THREADS;
+    }
+    else{ 
+        numberOfBlocks = (N * N) / N_THREADS + 1;
+    }
+
+    
+    // Call the kernel with 1 block and N^2 threads. This call introduces a restriction on the size of the array
+    // The max number of threads per block is 1024 so the max N is theoreticaly 32 (practicaly 30 because of the wrappings)
+    simulateIsing <<<numberOfBlocks, N_THREADS>>> (d_array1, d_array2, N, 500000);
+
+    cudaDeviceSynchronize();
+
+    numberOfBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
+
+    completeWrapping <<<numberOfBlocks, N_THREADS>>> (d_write, N);  // FIXMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+    cudaDeviceSynchronize();
+    
+
+
+    // Copy the device memory back to host again converting from 1D device array to 2D host array
+    for (int i = 0; i < N + 2; i++) {
+        cudaMemcpy(array1[i], d_array1 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
+        cudaMemcpy(array2[i], d_array2 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
+    }
+
+    
 
     // free memory
     for (int i = 0; i < N + 2; i++){
@@ -208,5 +287,8 @@ int main(int argc, char **argv){
     free(array1);
     free(array2);
     
+    cudaFree(d_array1);
+    cudaFree(d_array2);
+
     return 0;
 }

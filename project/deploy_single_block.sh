@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=10:00
 
-
-nvprof ./build/single_block.out
+#nvidia-smi
+./build/single_block.out
 
  
