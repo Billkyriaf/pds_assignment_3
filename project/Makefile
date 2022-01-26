@@ -47,13 +47,16 @@ build_sequential: $(SEQUENTIAL_SRC)
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
-run_sequential: sequential
+run_sequential_hpc: sequential
 	@rm -f *.out         # remove the previous slurm-*.out file 
 	@sbatch deploy.sh    # queue the next job
 	@sleep 2             # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
 	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+
+run_sequential: sequential
+	@./build/sequential.out
 
 
 $(BUILD_DIR)/%.c.o: %.c
@@ -63,23 +66,45 @@ $(BUILD_DIR)/%.c.o: %.c
 
 ######## V1 One moment per thread and singl3 block  ########
 
-single_block: pre_build build_single_block post_build
+single_moment: pre_build build_single_moment post_build
 
 
-build_single_block:
+build_single_moment:
 	@mkdir -p $(BUILD_DIR)
 	@echo "    $(GREEN)Building single block CUDA binary...$(NC)"
-	@$(NVCC) -o $(BUILD_DIR)/single_block.out $(SRC_DIRS)/gpu_1t_per_moment.cu
+	@$(NVCC) -o $(BUILD_DIR)/single_moment.out $(SRC_DIRS)/gpu_1t_per_moment_v1.cu
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
-run_single_block: single_block
+run_single_moment_hpc: single_moment
 	@rm -f *.out                     # remove the previous slurm-*.out file 
-	@sbatch deploy_single_block.sh   # queue the next job
+	@sbatch deploy_single_moment.sh   # queue the next job
 	@sleep 2                         # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
 	@timeout 15 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+
+run_single_moment: single_moment
+	@echo
+	@echo
+	@nvprof ./build/single_moment.out
+
+
+######## V2 Block of moments per thread ########
+block_moments: pre_build build_block_moments post_build
+
+build_block_moments:
+	@mkdir -p $(BUILD_DIR)
+	@echo "    $(GREEN)Building blocks CUDA binary...$(NC)"
+	@$(NVCC) -o $(BUILD_DIR)/block_moments.out $(SRC_DIRS)/gpu_threads.cu
+	@echo "    $(GREEN)Build finished successfully!$(NC)"
+	@echo	
+
+run_block_moments: block_moments
+	@echo
+	@echo
+	@nvprof ./build/block_moments.out
+
 
 .PHONY: clean
 clean:
