@@ -5,8 +5,9 @@
 #include <limits.h>
 #include <cuda.h>
 
-#define N 30
+#define N 18000
 #define N_THREADS 32
+#define N_ITER 35
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -46,7 +47,7 @@ void initializeArray(short int **arr){
             int rnd = rand() % 1000;  // Get a double random number in (0,1) range
             
             // 0.5 is chosen so that +1 and -1 are 50% each
-            if (rnd > 500){
+            if (rnd >= 500){
 
                 // positive spin
                 arr[i][j] = 1;  
@@ -177,25 +178,24 @@ __device__ int summation(short int *arr, int size){
  * @param size         The size of the single row of the 2D array without wrapping
  * @param iterations   The maximum number of iterations to run
  */ 
-__global__ void simulateIsing(short int *d_read, short int *d_write, int size, int iterations){
+__global__ void simulateIsing(short int *d_read, short int *d_write, int size){
 
-    for(int i = 0; i < iterations; i++){
 
-        int x = blockIdx.x * blockDim.x + threadIdx.x; // consider that the threads take continuous ids without considering the change of the block id.
+    int x = blockIdx.x * blockDim.x + threadIdx.x; // consider that the threads take continuous ids without considering the change of the block id.
 
-        // Index for the flatted out 2D array. This formula is explained in the report.
-        int index = size + 3 + x + (x / size) * 2;  
+    // Index for the flatted out 2D array. This formula is explained in the report.
+    int index = size + 3 + x + (x / size) * 2;  
 
-        // If the total number of threads is enough for all the N * N elements of the array, calculate their new moments.
-        if((index <= (size + 1) * (size  + 2) - 2){
-            int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
+    // If the total number of threads is enough for all the N * N elements of the array, calculate their new moments.
+    if (index <= (size + 1) * (size  + 2) - 2){
+        int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
 
-            d_write[index] = sign(sum);  // Update the value of this moment
-        }
+        d_write[index] = sign(sum);  // Update the value of this moment
     }
+    
 }
 
-__global__ void completeWrapping(int *d_write, int size){
+__global__ void completeWrapping(short int *d_write, int size){
     
     int j = blockIdx.x * blockDim.x + threadIdx.x + 1;
 
@@ -210,6 +210,39 @@ __global__ void completeWrapping(int *d_write, int size){
         d_write[j * (size + 2) + 1 + size] = d_write[j * (size + 2) + 1];  // This formula transforms 2D coordinates to 1D
         d_write[j * (size + 2)] = d_write[j * (size + 2) + size];  // This formula transforms 2D coordinates to 1D
     }
+}
+
+__global__ void debugPrints(short int *arr, int size){
+    printDeviceArray(arr, size);
+}
+
+__global__ void detectStableState(short int *d_out, short int *arr, int arr_size){
+    int thIdx = threadIdx.x;
+    int gthIdx = thIdx + blockIdx.x * blockDim.x;
+
+    const int gridSize = blockDim.x * gridDim.x;
+    
+    int sum = 0;
+    
+    for (int i = gthIdx; i < arr_size; i += gridSize)
+        sum += arr[i];
+    
+    __shared__ int shArr[N_THREADS];
+    shArr[thIdx] = sum;
+
+    __syncthreads();
+    
+    
+    for (int size = blockDim.x / 2; size > 0; size /= 2) { //uniform
+        if (thIdx<size)
+            shArr[thIdx] += shArr[thIdx+size];
+
+        __syncthreads();
+    }
+
+    if (thIdx == 0)
+        d_out[blockIdx.x] = shArr[0];
+    
 }
 
 int main(int argc, char **argv){
@@ -229,8 +262,18 @@ int main(int argc, char **argv){
     }
 
     // Device memory pointers
-    short int **d_array1;
-    short int **d_array2;
+    short int *d_array1;
+    short int *d_array2;
+
+    float time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+
+    printf("\nStarting simulation \n\n");
+
+    cudaEventRecord(start, 0);
 
 
     // Allocate the memory for the device arrays
@@ -256,18 +299,55 @@ int main(int argc, char **argv){
         numberOfBlocks = (N * N) / N_THREADS + 1;
     }
 
-    
-    // Call the kernel with 1 block and N^2 threads. This call introduces a restriction on the size of the array
-    // The max number of threads per block is 1024 so the max N is theoreticaly 32 (practicaly 30 because of the wrappings)
-    simulateIsing <<<numberOfBlocks, N_THREADS>>> (d_array1, d_array2, N, 500000);
+    // Unified memory pointer for detecting stable state
+    int *stable_state;
+    cudaMallocManaged((void **) &stable_state, 3 * sizeof(int));  // Allocate pointer for device and host access (unified memory)
 
-    cudaDeviceSynchronize();
+    // Initialize the stable state array with INT_MAX
+    stable_state[0] = INT_MAX;
+    stable_state[1] = INT_MAX - 1;
+    stable_state[2] = INT_MAX - 2;
 
-    numberOfBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
+    short int* dev_out;
+    cudaMallocManaged((void **)&dev_out, sizeof(short int) * numberOfBlocks);
 
-    completeWrapping <<<numberOfBlocks, N_THREADS>>> (d_write, N);  // FIXMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
-    cudaDeviceSynchronize();
-    
+    for (int iteration = 0; iteration < N_ITER; iteration++){
+        
+        // Call the kernel with 1 block and N^2 threads. This call introduces a restriction on the size of the array
+        // The max number of threads per block is 1024 so the max N is theoreticaly 32 (practicaly 30 because of the wrappings)
+        simulateIsing <<<numberOfBlocks, N_THREADS>>> (d_array1, d_array2, N);
+        cudaDeviceSynchronize();
+
+        numberOfBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
+
+        completeWrapping <<<numberOfBlocks, N_THREADS>>> (d_array2, N);
+        cudaDeviceSynchronize();
+
+        // debugPrints <<<1, 1>>> (d_array2, N);
+        // cudaDeviceSynchronize();
+
+        numberOfBlocks = (N * N % N_THREADS) ? (N * N / N_THREADS + 1) : N * N / N_THREADS;
+        
+        // detectStableState <<<numberOfBlocks, N_THREADS>>> (dev_out, d_array2, (N + 2) * (N + 2));
+
+        // detectStableState <<<1, N_THREADS>>> (dev_out, dev_out, numberOfBlocks);
+        // cudaDeviceSynchronize();
+
+        // stable_state[iteration % 3] = dev_out[0];
+
+        // // printf("Iteration: %d, energy %d\n\n\n", iteration, stable_state[iteration % 3]);
+
+        // if (stable_state[0] == stable_state[2]) {
+        //     printf("\n\n C O N V E R G E N C E !! @ iteration %d\n\n", iteration);
+        //     break;
+        // }
+        
+        // Swap the two arrays.
+        short int *tmp = d_array2;
+        d_array2 = d_array1;
+        d_array1 = tmp;
+
+    }
 
 
     // Copy the device memory back to host again converting from 1D device array to 2D host array
@@ -276,7 +356,11 @@ int main(int argc, char **argv){
         cudaMemcpy(array2[i], d_array2 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
     }
 
-    
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("Running time:  %3.1f ms \n\n", time);
 
     // free memory
     for (int i = 0; i < N + 2; i++){
@@ -289,6 +373,8 @@ int main(int argc, char **argv){
     
     cudaFree(d_array1);
     cudaFree(d_array2);
+    cudaFree(dev_out);
+    cudaFree(stable_state);
 
     return 0;
 }
