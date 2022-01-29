@@ -5,9 +5,9 @@
 #include <limits.h>
 #include <cuda.h>
 
-#define N 18000
-#define N_THREADS 32
-#define N_ITER 35
+#define N 1000  // The size of the initial array (N * N moments)
+#define N_THREADS 32  // Number of threads per block
+#define N_ITER 10  // The number of iterations
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -114,6 +114,7 @@ void printArray(short int **arr){
     printf("\n\n\n");
 }
 
+
 /**
  * Prints an 1D array like a 2D array for every size + 2 elements
  * 
@@ -136,6 +137,7 @@ __device__ void printDeviceArray(short int *arr, int size){
     }
     printf("\n");
 }
+
 
 /**
  * Sign function implementation
@@ -180,14 +182,24 @@ __device__ int summation(short int *arr, int size){
  */ 
 __global__ void simulateIsing(short int *d_read, short int *d_write, int size){
 
+    // This is the unique value that every thread in every block gets. This value represents the index of the NxN array
+    // of the moment to ble calculated. This index does not take in to acount the wrapping lines (See initializeArray function for the wrapping system)
+    int index_2d = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int x = blockIdx.x * blockDim.x + threadIdx.x; // consider that the threads take continuous ids without considering the change of the block id.
-
-    // Index for the flatted out 2D array. This formula is explained in the report.
-    int index = size + 3 + x + (x / size) * 2;  
+    /**
+    * Index for the flatted out 2D array. The array passed in the GPU memory is 1D and already has the wrappings included.
+    * To find the corespondance of the 2D index to the 1D index we do the following. The first size + 3 (size = N) elements of the array
+    * are elements from the wrapping rows and columns. After that the index_2d is added and finaly index_2d / size calculates the line of the
+    * element on the 2D array. For every line we need to add 2 because the first and last element of the array are there for wrapping
+    */
+    int index = size + 3 + index_2d + (index_2d / size) * 2;  
 
     // If the total number of threads is enough for all the N * N elements of the array, calculate their new moments.
     if (index <= (size + 1) * (size  + 2) - 2){
+        // printf("block id %d, t_id %d , index %d\n", blockIdx.x, threadIdx.x, index);
+
+        // Sum all the neighbours. The index - (size + 2) is the above element index + (size + 2) is the below element. The 2 factor is added 
+        // Because the array with the wrappings is 2 rows bigger that the initial row
         int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
 
         d_write[index] = sign(sum);  // Update the value of this moment
@@ -195,6 +207,14 @@ __global__ void simulateIsing(short int *d_read, short int *d_write, int size){
     
 }
 
+
+/**
+ * @brief This function calculates and updates the outer rows and columns that contain the oposite side elements so that the wrapping 
+ * can be performed.
+ * 
+ * @param d_write The just written array to update the wraps
+ * @param size The size of the initial array (without the wraps)
+ */
 __global__ void completeWrapping(short int *d_write, int size){
     
     int j = blockIdx.x * blockDim.x + threadIdx.x + 1;
@@ -216,6 +236,17 @@ __global__ void debugPrints(short int *arr, int size){
     printDeviceArray(arr, size);
 }
 
+
+/**
+ * @brief Sums in parallel all the elements of the array. To perform the operation the function must be called twice
+ * The first time the array is spit in blocks and the sum of every block is calculated. The sum of every block is then returned
+ * in the dout array. The second time of the function is called with the dout as input. The sum of the dout array is returned in the 
+ * dout[0]
+ * 
+ * @param d_out The array to return the results
+ * @param arr The input array
+ * @param arr_size The size of the inputu array
+ */
 __global__ void detectStableState(short int *d_out, short int *arr, int arr_size){
     int thIdx = threadIdx.x;
     int gthIdx = thIdx + blockIdx.x * blockDim.x;
@@ -244,6 +275,8 @@ __global__ void detectStableState(short int *d_out, short int *arr, int arr_size
         d_out[blockIdx.x] = shArr[0];
     
 }
+
+
 
 int main(int argc, char **argv){
 
@@ -275,21 +308,46 @@ int main(int argc, char **argv){
 
     cudaEventRecord(start, 0);
 
-
     // Allocate the memory for the device arrays
     cudaMalloc((void**)&d_array1, sizeof(short int) * (N + 2) * (N + 2));
     cudaMalloc((void**)&d_array2, sizeof(short int) * (N + 2) * (N + 2));
 
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("Memory allocations time:  %3.1f ms \n\n", time);
+
+    cudaEventRecord(start, 0);
+
     // Initialize the array 1 with random -1 and 1 values (50% distribution)
     initializeArray(array1);
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("Initialization time:  %3.1f ms \n\n", time);
+
+    cudaEventRecord(start, 0);
 
 
     // Copy the host memory to the device memory. This transfer also converts the host 2D array to 1D for the device
     for (int i = 0; i < N + 2; i++) {
         cudaMemcpy(d_array1 + i * (N + 2), array1[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_array2 + i * (N + 2), array2[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_array2 + i * (N + 2), array2[i], sizeof(short int) * (N + 2), cudaMemcpyHostToDevice);
     }
     
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("Host -> Device time:  %3.1f ms \n\n", time);
+
+    cudaEventRecord(start, 0);
+
     int numberOfBlocks;
 
     if((N * N) % N_THREADS == 0){
@@ -311,6 +369,16 @@ int main(int argc, char **argv){
     short int* dev_out;
     cudaMallocManaged((void **)&dev_out, sizeof(short int) * numberOfBlocks);
 
+    cudaEventRecord(start, 0);
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("Memory allocations time:  %3.1f ms \n\n", time);
+    
+    cudaEventRecord(start, 0);
+
     for (int iteration = 0; iteration < N_ITER; iteration++){
         
         // Call the kernel with 1 block and N^2 threads. This call introduces a restriction on the size of the array
@@ -320,47 +388,66 @@ int main(int argc, char **argv){
 
         numberOfBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
 
+        // Complete the wrapping lines for the array that was just calculated
         completeWrapping <<<numberOfBlocks, N_THREADS>>> (d_array2, N);
         cudaDeviceSynchronize();
 
-        // debugPrints <<<1, 1>>> (d_array2, N);
-        // cudaDeviceSynchronize();
+        // UNCOMMENT for debug prints
+        
+        /*
+        debugPrints <<<1, 1>>> (d_array2, N);
+        cudaDeviceSynchronize();
 
+        debugPrints <<<1, 1>>> (d_array1, N);
+        cudaDeviceSynchronize();
+        */
+
+
+        // UCOMMNET to stop the sim once a stable state is reached
+        /*
         numberOfBlocks = (N * N % N_THREADS) ? (N * N / N_THREADS + 1) : N * N / N_THREADS;
         
-        // detectStableState <<<numberOfBlocks, N_THREADS>>> (dev_out, d_array2, (N + 2) * (N + 2));
+        detectStableState <<<numberOfBlocks, N_THREADS>>> (dev_out, d_array2, (N + 2) * (N + 2));
 
-        // detectStableState <<<1, N_THREADS>>> (dev_out, dev_out, numberOfBlocks);
-        // cudaDeviceSynchronize();
+        detectStableState <<<1, N_THREADS>>> (dev_out, dev_out, numberOfBlocks);
+        cudaDeviceSynchronize();
 
-        // stable_state[iteration % 3] = dev_out[0];
+        stable_state[iteration % 3] = dev_out[0];
 
-        // // printf("Iteration: %d, energy %d\n\n\n", iteration, stable_state[iteration % 3]);
+        // printf("Iteration: %d, energy %d\n\n\n", iteration, stable_state[iteration % 3]);
 
-        // if (stable_state[0] == stable_state[2]) {
-        //     printf("\n\n C O N V E R G E N C E !! @ iteration %d\n\n", iteration);
-        //     break;
-        // }
+        if (stable_state[0] == stable_state[2]) {
+            printf("\n\n C O N V E R G E N C E !! @ iteration %d\n\n", iteration);
+            break;
+        }
+        */
         
         // Swap the two arrays.
         short int *tmp = d_array2;
         d_array2 = d_array1;
         d_array1 = tmp;
-
-    }
-
-
-    // Copy the device memory back to host again converting from 1D device array to 2D host array
-    for (int i = 0; i < N + 2; i++) {
-        cudaMemcpy(array1[i], d_array1 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
-        cudaMemcpy(array2[i], d_array2 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
     }
 
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&time, start, stop);
 
-    printf("Running time:  %3.1f ms \n\n", time);
+    printf("GPU run time:  %3.1f ms \n\n", time);
+
+
+    cudaEventRecord(start, 0);
+
+    // Copy the device memory back to host again converting from 1D device array to 2D host array
+    for (int i = 0; i < N + 2; i++) {
+        cudaMemcpy(array1[i], d_array1 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
+        //cudaMemcpy(array2[i], d_array2 + i * (N + 2), sizeof(short int) * (N + 2), cudaMemcpyDeviceToHost);
+    }
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+
+    printf("MEmory Device -> Host time:  %3.1f ms \n\n", time);
 
     // free memory
     for (int i = 0; i < N + 2; i++){

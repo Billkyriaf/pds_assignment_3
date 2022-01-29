@@ -3,7 +3,7 @@
 #include <time.h>
 #include <limits.h>
 
-#define N 10000
+#define N 1000  // The number of elements of the array is N * N
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -85,7 +85,6 @@ void initializeArray(short int **arr){
     }
 }
 
-
 /**
  * @brief Prints a 2D array 
  * 
@@ -110,10 +109,23 @@ void printArray(short int **arr){
     printf("\n\n\n");
 }
 
+/**
+ * @brief Find the sign value of the input
+ * 
+ * @param sum The summation result to find the sign
+ * @return 1 if sum is > 0, -1 else 
+ */
 short int sign(short int sum){
     return sum > 0 ? 1 : -1;
 }
 
+/**
+ * @brief Sums all the lements of the array. This is used to detect convergence. If the value of the sum is the same
+ * for multiple iterations there is a good possibility that the simulation has reached a repetitive state
+ * 
+ * @param arr The array to produce the sum
+ * @return The sum of all the lements of the array 
+ */
 int summation(short int **arr){
     
     int sum = 0;
@@ -127,14 +139,29 @@ int summation(short int **arr){
     return sum;
 }
 
+/**
+ * @brief Run the simulation for the number of iterations specified. For every iteration all the elements (moments) of
+ * the read array are read along with their neighbours, the sum of all the values is passed through the sigh function
+ * and written to the write matrix. 
+ * 
+ * The read and write matrices are swapped and the next itteration begins 
+ * 
+ * @param read The matrix to read from
+ * @param write The matrix to write to
+ * @param iterations The number of iterations to run
+ */
 void simulateIsing(short int **read, short int **write, int iterations){
 
+    // Holds the last 3 sums of the write matrix
     int previous_sum[3] = {INT_MAX, INT_MAX - 1, INT_MAX - 2};
+
+    // The initial value is the summation of the read matrix
     previous_sum[0] = summation(read);
 
-    printf("Initial summation %d\n", previous_sum[0]);
+    // printf("Initial summation %d\n", previous_sum[0]);
     // printArray(read);
 
+    // For every iteration ...
     for (int iteration = 0; iteration < iterations; iteration++){
         // For every row...
         for (int i = 1; i <= N; i++){
@@ -161,23 +188,34 @@ void simulateIsing(short int **read, short int **write, int iterations){
             write[i][0] = write[i][N];
         }
 
+        // Count the new sum of the array
         previous_sum[iteration % 3] = summation(write);
 
         printf("Iteration: %d, summation %d\n", iteration, previous_sum[iteration % 3]);
         // printArray(write);
 
+        // If 3 sums in a row have the same value or if the same value appears every other iteration ...
         if (previous_sum[0] == previous_sum[2]) {
+
+            // ... a stable state is reached so the iterations stop
             break;
         }
         
-        
+        // Swap the references for the two arrays so that on the next iteration we read from the previous write
         short int **tmp = read;
         read = write;
         write = tmp;
     }
 }
 
-
+/**
+ * @brief Main function runs the simulation until a stable state is reached or the number of iterations 
+ * requested finish running.
+ * 
+ * To keep runnig evn if a stable state is reached change the break condition inside the simulateIsing
+ * function to False
+ * 
+ */
 int main(int argc, char **argv){
 
     // The array is N + 2 size for the wrapping around on both dimensions.
@@ -197,7 +235,8 @@ int main(int argc, char **argv){
     initializeArray(array1);
     // printArray(array1);
 
-    simulateIsing(array1, array2, 10000);
+    // Run the simulaation for 100 iterations
+    simulateIsing(array1, array2, 100);
 
     // free memory
     for (int i = 0; i < N + 2; i++){
