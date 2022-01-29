@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <limits.h>
 
-#define N 1000
-#define BLK_SIZE 32
+#define N 20000
+#define BLK_SIZE 64
 #define MOMENTS_PER_THREAD 32
 #define N_ITER 10
 

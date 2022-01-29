@@ -15,6 +15,7 @@ NC =
 
 CFLAGS := -O3
 
+all: run_sequential run_single_moment run_block_moments run_shared_memory
 
 sequential: pre_build build_sequential post_build
 
@@ -45,7 +46,12 @@ run_sequential_hpc: sequential
 	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 run_sequential: sequential
+	@echo
+	@echo
+	@echo "RUNNING SEQUENTIAL"
 	@$(BUILD_DIR)/sequential.out
+	@echo
+	@echo
 
 
 ######## V1 One moment per thread and singl3 block  ########
@@ -70,7 +76,10 @@ run_single_moment_hpc: single_moment
 run_single_moment: single_moment
 	@echo
 	@echo
-	@nvprof $(BUILD_DIR)/single_moment.out
+	@echo "RUNNING SINGLE MOMENT PER THREAD"
+	@$(BUILD_DIR)/single_moment.out
+	@echo
+	@echo
 
 
 ######## V2 Block of moments per thread ########
@@ -94,7 +103,10 @@ run_block_moments_hpc: single_moment
 run_block_moments: block_moments
 	@echo
 	@echo
-	@nvprof $(BUILD_DIR)/block_moments.out
+	@echo "RUNNING MULTIPLE MOMENTS PER THREAD"
+	@$(BUILD_DIR)/block_moments.out
+	@echo
+	@echo
 
 
 ######## V3 Shared memory ########
@@ -110,7 +122,10 @@ build_shared_memory:
 run_shared_memory: build_shared_memory
 	@echo
 	@echo
-	@nvprof ./build/shared_memory.out	
+	@echo "RUNNING MULTIPLE MOMENTS PER THREAD SHARED MEMORY"
+	@$(BUILD_DIR)/shared_memory.out
+	@echo
+	@echo
 
 run_shared_memory_hpc: single_moment
 	@rm -f *.out                  # remove the previous slurm-*.out file 

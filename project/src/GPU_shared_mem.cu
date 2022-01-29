@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N 1000
-#define BLK_THREADS 32
+#define N 20000
+#define BLK_THREADS 64
 #define SM 6
 #define SM_CORES 128
 #define ITERATIONS 10
@@ -515,11 +515,9 @@ int main(int argc, char **argv){
     // free memory
     for (int i = 0; i < N + 2; i++){
         free(array1[i]);
-        free(array2[i]);
     }
 
     free(array1);
-    free(array2);
     
     cudaFree(d_array1);
     cudaFree(d_array2);

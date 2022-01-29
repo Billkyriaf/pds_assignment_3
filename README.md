@@ -4,7 +4,7 @@
   <h4 align="center">School of Electrical & Computer Engineering</h4>
   <p align="center">
     Contributors: Kyriafinis Vasilis, Koro Erika
-    <br />
+    <br/>
     Winter Semester 2021 - 2022
     <br />
     <br />

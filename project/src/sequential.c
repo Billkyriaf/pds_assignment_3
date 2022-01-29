@@ -1,9 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 #include <time.h>
 #include <limits.h>
 
-#define N 1000  // The number of elements of the array is N * N
+#define N 20000  // The number of elements of the array is N * N
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -191,7 +192,7 @@ void simulateIsing(short int **read, short int **write, int iterations){
         // Count the new sum of the array
         previous_sum[iteration % 3] = summation(write);
 
-        printf("Iteration: %d, summation %d\n", iteration, previous_sum[iteration % 3]);
+        // printf("Iteration: %d, summation %d\n", iteration, previous_sum[iteration % 3]);
         // printArray(write);
 
         // If 3 sums in a row have the same value or if the same value appears every other iteration ...
@@ -209,6 +210,25 @@ void simulateIsing(short int **read, short int **write, int iterations){
 }
 
 /**
+ * Calculates the elapse time
+ *
+ * @param begin the starting timestamp
+ * @param end the ending timestamp
+ * @return elapsed time in seconds
+ */
+double measureTime(struct timeval begin, struct timeval end) {
+    long seconds;
+    long microseconds;
+    double elapsed;
+
+    seconds = end.tv_sec - begin.tv_sec;
+    microseconds = end.tv_usec - begin.tv_usec;
+    elapsed = seconds + microseconds * 1e-6;
+
+    return elapsed;
+}
+
+/**
  * @brief Main function runs the simulation until a stable state is reached or the number of iterations 
  * requested finish running.
  * 
@@ -217,6 +237,9 @@ void simulateIsing(short int **read, short int **write, int iterations){
  * 
  */
 int main(int argc, char **argv){
+
+    // Vars needed for execution time measurement
+    struct timeval begin, end;
 
     // The array is N + 2 size for the wrapping around on both dimensions.
     short int **array1 = (short int **) calloc ((N + 2), sizeof(short int *));
@@ -232,11 +255,21 @@ int main(int argc, char **argv){
         array2[i] = (short int *) calloc ((N + 2), sizeof(short int));
     }
 
+    
     initializeArray(array1);
     // printArray(array1);
 
-    // Run the simulaation for 100 iterations
-    simulateIsing(array1, array2, 100);
+
+    printf("Starting Simulation\n");
+    
+    gettimeofday(&begin, 0);
+
+    // Run the simulaation for 10 iterations
+    simulateIsing(array1, array2, 10);
+
+    gettimeofday(&end, 0);
+
+    printf("Time for simulation: %.5f seconds.\n", measureTime(begin, end));
 
     // free memory
     for (int i = 0; i < N + 2; i++){

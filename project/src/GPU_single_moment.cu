@@ -5,8 +5,8 @@
 #include <limits.h>
 #include <cuda.h>
 
-#define N 1000  // The size of the initial array (N * N moments)
-#define N_THREADS 32  // Number of threads per block
+#define N 20000  // The size of the initial array (N * N moments)
+#define N_THREADS 1024  // Number of threads per block
 #define N_ITER 10  // The number of iterations
 
 /**
