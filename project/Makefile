@@ -13,20 +13,7 @@ GREEN =
 RED = 
 NC = 
 
-# Directories
-# LIBRARIES_SRC := $(shell find $(SRC_DIRS)/libraries $(SRC_DIRS)/ext_libraries -name '*.c')
-# LIBRARIES_SRC := $(LIBRARIES_SRC:%=$(BUILD_DIR)/%.o)
-
-SEQUENTIAL_SRC := $(shell find $(SRC_DIRS) -name '*.c') # $(SRC_DIRS)/sequential.c
-SEQUENTIAL_SRC := $(SEQUENTIAL_SRC:%=$(BUILD_DIR)/%.o)
-
-
-# Every folder in ./src will need to be passed to GCC so that it can find header files
-INC_DIRS := $(shell find $(SRC_DIRS) -type d)
-# Add a prefix to INC_DIRS. So moduleA would become -ImoduleA. GCC understands this -I flag
-INC_FLAGS := $(addprefix -I,$(INC_DIRS))
-
-CFLAGS := $(INC_FLAGS) -O3
+CFLAGS := -O3
 
 
 sequential: pre_build build_sequential post_build
@@ -41,9 +28,11 @@ post_build:
 	@echo
 
 
-build_sequential: $(SEQUENTIAL_SRC)
+######## V0 sequential  ########
+
+build_sequential:
 	@echo "    $(GREEN)Building Serial binary...$(NC)"
-	@$(CC) $(CFLAGS) -o $(BUILD_DIR)/sequential.out $(SEQUENTIAL_SRC)
+	@$(CC) $(CFLAGS) -o $(BUILD_DIR)/sequential.out $(SRC_DIRS)/sequential.c
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
@@ -56,38 +45,32 @@ run_sequential_hpc: sequential
 	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 run_sequential: sequential
-	@./build/sequential.out
-
-
-$(BUILD_DIR)/%.c.o: %.c
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@$(BUILD_DIR)/sequential.out
 
 
 ######## V1 One moment per thread and singl3 block  ########
 
 single_moment: pre_build build_single_moment post_build
 
-
 build_single_moment:
 	@mkdir -p $(BUILD_DIR)
 	@echo "    $(GREEN)Building single block CUDA binary...$(NC)"
-	@$(NVCC) -o $(BUILD_DIR)/single_moment.out $(SRC_DIRS)/gpu_1t_per_moment_v1.cu
+	@$(NVCC) -o $(BUILD_DIR)/single_moment.out $(SRC_DIRS)/GPU_single_moment.cu
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo
 
 run_single_moment_hpc: single_moment
-	@rm -f *.out                     # remove the previous slurm-*.out file 
-	@sbatch deploy_single_moment.sh   # queue the next job
-	@sleep 2                         # wait for 2 seconds for the new slurm-*.out file to be created
+	@rm -f *.out                         # remove the previous slurm-*.out file 
+	@sbatch hpc_deploy_single_moment.sh  # queue the next job
+	@sleep 2                             # wait for 2 seconds for the new slurm-*.out file to be created
 	@echo
 	@echo
-	@timeout 15 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
+	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 run_single_moment: single_moment
 	@echo
 	@echo
-	@nvprof ./build/single_moment.out
+	@nvprof $(BUILD_DIR)/single_moment.out
 
 
 ######## V2 Block of moments per thread ########
@@ -96,14 +79,46 @@ block_moments: pre_build build_block_moments post_build
 build_block_moments:
 	@mkdir -p $(BUILD_DIR)
 	@echo "    $(GREEN)Building blocks CUDA binary...$(NC)"
-	@$(NVCC) -o $(BUILD_DIR)/block_moments.out $(SRC_DIRS)/gpu_threads.cu
+	@$(NVCC) -o $(BUILD_DIR)/block_moments.out $(SRC_DIRS)/GPU_block_moments.cu
 	@echo "    $(GREEN)Build finished successfully!$(NC)"
 	@echo	
+
+run_block_moments_hpc: single_moment
+	@rm -f *.out                         # remove the previous slurm-*.out file 
+	@sbatch hpc_deploy_block_moments.sh  # queue the next job
+	@sleep 2                             # wait for 2 seconds for the new slurm-*.out file to be created
+	@echo
+	@echo
+	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 run_block_moments: block_moments
 	@echo
 	@echo
-	@nvprof ./build/block_moments.out
+	@nvprof $(BUILD_DIR)/block_moments.out
+
+
+######## V3 Shared memory ########
+shared_memory: pre_build build_shared_memory post_build
+
+build_shared_memory:
+	@mkdir -p $(BUILD_DIR)
+	@echo "    $(GREEN)Building blocks CUDA binary...$(NC)"
+	@$(NVCC) -o $(BUILD_DIR)/shared_memory.out $(SRC_DIRS)/GPU_shared_mem.cu
+	@echo "    $(GREEN)Build finished successfully!$(NC)"
+	@echo	
+
+run_shared_memory: build_shared_memory
+	@echo
+	@echo
+	@nvprof ./build/shared_memory.out	
+
+run_shared_memory_hpc: single_moment
+	@rm -f *.out                  # remove the previous slurm-*.out file 
+	@sbatch hpc_shared_memory.sh  # queue the next job
+	@sleep 2                      # wait for 2 seconds for the new slurm-*.out file to be created
+	@echo
+	@echo
+	@timeout 10 tail -fn +1 *.out || exit 0  # tail the new slurm-*.out file for 5 seconds before exiting with code 0
 
 
 .PHONY: clean
