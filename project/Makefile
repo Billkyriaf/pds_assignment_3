@@ -15,7 +15,7 @@ NC =
 
 CFLAGS := -O3
 
-all: run_sequential run_single_moment run_block_moments run_shared_memory
+all: run_single_moment run_block_moments run_shared_memory
 
 sequential: pre_build build_sequential post_build
 
@@ -77,7 +77,7 @@ run_single_moment: single_moment
 	@echo
 	@echo
 	@echo "RUNNING SINGLE MOMENT PER THREAD"
-	@$(BUILD_DIR)/single_moment.out
+	@nvprof $(BUILD_DIR)/single_moment.out
 	@echo
 	@echo
 
@@ -104,7 +104,7 @@ run_block_moments: block_moments
 	@echo
 	@echo
 	@echo "RUNNING MULTIPLE MOMENTS PER THREAD"
-	@$(BUILD_DIR)/block_moments.out
+	@nvprof $(BUILD_DIR)/block_moments.out
 	@echo
 	@echo
 
@@ -123,7 +123,7 @@ run_shared_memory: build_shared_memory
 	@echo
 	@echo
 	@echo "RUNNING MULTIPLE MOMENTS PER THREAD SHARED MEMORY"
-	@$(BUILD_DIR)/shared_memory.out
+	@nvprof $(BUILD_DIR)/shared_memory.out
 	@echo
 	@echo
 

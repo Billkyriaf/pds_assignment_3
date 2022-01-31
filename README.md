@@ -94,6 +94,7 @@ GNU Make is a tool which controls the generation of executables and other non-so
 
 1. `cd` to the project directory and run one of the following `Makefile` targets:
 
+    - `make all`: Runs all the targets this can take some time depending on the hardware.
     - `make run_sequential`: Compiles and runs a job for the `sequential.c` file.
     - `make run_single_moment`: Compiles and runs a job for the `GPU_single_moment.cu` file.
     - `make run_block_moments`: Compiles and runs a job for the `GPU_block_moments.cu` file.

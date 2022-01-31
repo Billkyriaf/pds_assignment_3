@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 #define N 10000
-#define BLK_THREADS 64
+#define BLK_THREADS 32
 #define SM 6
 #define SM_CORES 128
 #define ITERATIONS 50
@@ -12,11 +12,11 @@
  * This is strongly hardware related. This specific value is calculated for 96KB of shared memory per multiprocessor.
  * 
  * This number ensures that for 128 cuda cores per multiprocessor (GTX 1050 Ti) and 32 threads per block if 4 blocks 
- * are running at the same time in the same multiprocessor the shared memory is enough for all of them. The actual nuber
+ * are running at the same time in the same multiprocessor the shared memory is enough for all of them. The actual number
  * is 12.288 but 12100 (110^2) is the closest perfect square. The actual value is 108 because of the 2 wrapping lines
  * on both sides of the array. 
  */
-#define MAX_BLK_SIZE 50  // was 108
+#define MAX_BLK_SIZE 70  // was 108
 
 
 /**
@@ -136,55 +136,87 @@ __device__ short int sign(short int sum){
 }
 
 /**
- * Kernel function that simulates the ising model. Every thread calculates more than one moments using shared memory.
+ * @brief Kernel function that simulates the ising model. Every thread calculates more than one moments using shared memory.
  * 
- * @param d_read       The initial array
- * @param d_write      A copy of the initial array in which data are written to
- * @param size         The size of the single row of the 2D array without wrapping
- */ 
+ * @param arraySize        The size of the global memory array (no wrappings)
+ * @param sharedArraySize  The size of the shared memory array (WITH wrappings)
+ * @param d_read           The global memory array to read from
+ * @param d_write          The global memory array to write to
+ * @param blocksPerRow     The number of blocks opend for one side of the array (total number of blocks is this values squared)
+ * @param momentsPerThread The number of moments every thread will calculate
+ */
 __global__ void simulateIsing(int arraySize, int sharedArraySize, short int *d_read, short int *d_write, int blocksPerRow, int momentsPerThread){
 
+    // The size of the shared memory is depended on the size of the sub array.
     __shared__ short int sharedArray[(MAX_BLK_SIZE + 2) * (MAX_BLK_SIZE + 2)];
 
+    // i and j are the indexes of the first element of each sub block on the global array.
     int i = (blockIdx.x / blocksPerRow) * (sharedArraySize - 2);
     int j = (blockIdx.x % blocksPerRow) * (sharedArraySize - 2);
 
+
+    // Acount for subarrays overlapping
     j = (j + sharedArraySize > arraySize) ? arraySize + 2 - sharedArraySize : j;
 
     i = (i + sharedArraySize > arraySize) ? arraySize + 2 - sharedArraySize : i;
 
-    // Index for the flatted out 2D array.
+    // Index for the flatted out 2D array. This index is the index of the firste moment of the block on the global memory
     int globalIndex = (arraySize + 2) * i + j;
     
 
+    // Copy all the elements from the global memory to the shared memory
     for (int x = 0; x < sharedArraySize; x += blockDim.x){
 
+        // Some of the threads at the end of the array go out of bounds.
+        // This is because the number of the sub array is not always divided with the number of threads
+        // The extra threads simply exit the loop and wait on the syncronise
         if (threadIdx.x + x < sharedArraySize){
+            // The index to the shared memory
             int sharedOffset = (threadIdx.x + x) * sharedArraySize;
+
+            // The index to the global memory
             int globalOffset = globalIndex + (threadIdx.x + x) * (arraySize + 2);
 
+
+            // Every thread copies a row of momnets
             for (int k = 0; k < sharedArraySize; k++) {
                 sharedArray[sharedOffset + k] = d_read[globalOffset + k];
             }
         }
     }
 
+    // DEBUG prints
     // if (threadIdx.x == 0 && blockIdx.x == 0){
     //     printDeviceArray(d_read, arraySize);
 
     //     printDeviceArray(sharedArray, sharedArraySize - 2);
     // }
 
+
+    // Threads need to be synced because all the data must be fetched from
+    // the global memory before starting to caclulate the new array
     __syncthreads();
 
+
     int stride = blockDim.x;
+    
+    // From this point forward the problem to be solved is that of the small sub array. 
+    // To convert this problem to something previously solve the wrapping lines are subtracted
+    // from the size because they are acounted for on the formulas below
     sharedArraySize -= 2;
 
     for (int k = 0; k < blockDim.x * momentsPerThread; k = k + stride) {
 
-        // // Index for the flatted out 2D array.
+        // This is the unique value that every thread in every block gets. 
+        // This index does not take in to acount the wrapping lines (See initializeArray function for the wrapping system)
         int index_2d = threadIdx.x + k;
 
+        /**
+        * Index for the flatted out 2D array. The array passed in the GPU memory is 1D and already has the wrappings included.
+        * To find the corespondance of the 2D index to the 1D index we do the following. The first size + 3 (size = N) elements of the array
+        * are elements from the wrapping rows and columns. After that the index_2d is added and finaly index_2d / size calculates the line of the
+        * element on the 2D array. For every line we need to add 2 because the first and last element of the array are there for wrapping
+        */
         int index = sharedArraySize + 3 + index_2d + (index_2d / sharedArraySize) * 2;
 
         // if (blockIdx.x == 0){
@@ -192,25 +224,30 @@ __global__ void simulateIsing(int arraySize, int sharedArraySize, short int *d_r
         // }
 
         if (index <= (sharedArraySize + 1) * (sharedArraySize  + 2) - 2){
+            
             // printf("block id %d, t_id %d , index %d\n", blockIdx.x, threadIdx.x, index);
-
-            int sum = sharedArray[index - 1] + sharedArray[index + 1] + sharedArray[index - (sharedArraySize + 2)] + sharedArray[index + (sharedArraySize + 2)] + sharedArray[index];
-
-            int newIndex = globalIndex + arraySize + 3 + index_2d + (index_2d / sharedArraySize) * (2 + arraySize - sharedArraySize); 
-
             // if (blockIdx.x == 0){
             //     printf("blockId: %d, threadId: %d, index: %d, global index: %d\n", blockIdx.x, threadIdx.x, index, newIndex);
             // }
-            
-            d_write[newIndex] = sign(sum);  // Update the value of this moment
+
+
+            // The sum of all the neighbors read from the sharedArray
+            int sum = sharedArray[index - 1] + sharedArray[index + 1] + sharedArray[index - (sharedArraySize + 2)] + sharedArray[index + (sharedArraySize + 2)] + sharedArray[index];
+
+            // The index that connects the local memory to the global memory
+            int newIndex = globalIndex + arraySize + 3 + index_2d + (index_2d / sharedArraySize) * (2 + arraySize - sharedArraySize); 
+
+            // Write the elemets on the global memory. There is no need to transfer the write array to the Shared memory
+            // because only one write access is performed per moment
+            d_write[newIndex] = sign(sum);
 
         } else {
+            // If a thread goes out of bounds brakes from the loop
             break;
         }
     }
 
-    __syncthreads();
-
+    // __syncthreads();
     // if (threadIdx.x == 0 && blockIdx.x == 0){
     //     printDeviceArray(sharedArray, sharedArraySize);
     //     printDeviceArray(sharedArrayWrite, sharedArraySize);
@@ -290,11 +327,11 @@ __global__ void detectStableState(short int *d_out, short int *arr, int arr_size
 
 
 /**
- * @brief 
+ * @brief Finds the optimal value for the sub block size for minimum overlapping
  * 
- * @param size 
- * @param block 
- * @return int 
+ * @param size   The array size
+ * @param block  The targeted block size
+ * @return       The best size for the block of moments (The one that produces less overlapping)
  */
 int optimalBlockSize(int size, int block){
     int fit = block;
@@ -463,7 +500,7 @@ int main(int argc, char **argv){
     
     int sharedArraySize = calculateGrid(&nSimBlocks, &momentsPerThread, &blockSize, N);
 
-    printf("Number of blocks: %d, moments per thread: %d, shared array size: %d, block size %d\n", nSimBlocks, momentsPerThread, sharedArraySize, blockSize);
+    printf("Number of blocks: %d, moments per thread: %d, shared array size: %d, block size %d\n\n", nSimBlocks * nSimBlocks, momentsPerThread, sharedArraySize, blockSize);
 
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
