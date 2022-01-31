@@ -4,7 +4,7 @@
 #include <time.h>
 #include <limits.h>
 
-#define N 20000  // The number of elements of the array is N * N
+#define N 10000  // The number of elements of the array is N * N
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -265,7 +265,7 @@ int main(int argc, char **argv){
     gettimeofday(&begin, 0);
 
     // Run the simulaation for 10 iterations
-    simulateIsing(array1, array2, 10);
+    simulateIsing(array1, array2, 50);
 
     gettimeofday(&end, 0);
 

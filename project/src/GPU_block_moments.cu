@@ -3,11 +3,21 @@
 #include <stdlib.h>
 #include <limits.h>
 
-#define N 20000
-#define BLK_SIZE 64
-#define MOMENTS_PER_THREAD 32
-#define N_ITER 10
+#define N 10000
+#define BLK_THREADS 64
+#define SM 6
+#define SM_CORES 128
+#define ITERATIONS 50
 
+/**
+ * This is strongly hardware related. This specific value is calculated for 96KB of shared memory per multiprocessor.
+ * 
+ * This number ensures that for 128 cuda cores per multiprocessor (GTX 1050 Ti) and 32 threads per block if 4 blocks 
+ * are running at the same time in the same multiprocessor the shared memory is enough for all of them. The actual nuber
+ * is 12.288 but 12100 (110^2) is the closest perfect square. The actual value is 108 because of the 2 wrapping lines
+ * on both sides of the array. 
+ */
+#define MAX_BLK_SIZE 50  // was 108
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -154,31 +164,38 @@ __device__ short int sign(short int sum){
  * @param d_write      A copy of the initial array in which data are written to
  * @param size         The size of the single row of the 2D array without wrapping
  */ 
-__global__ void simulateIsing(short int *d_read, short int *d_write, int size){
+__global__ void simulateIsing(int arraySize, int sharedArraySize, short int *d_read, short int *d_write, int blocksPerRow, int momentsPerThread){
+
+    int i = (blockIdx.x / blocksPerRow) * (sharedArraySize - 2);
+    int j = (blockIdx.x % blocksPerRow) * (sharedArraySize - 2);
+
+    j = (j + sharedArraySize > arraySize) ? arraySize + 2 - sharedArraySize : j;
+
+    i = (i + sharedArraySize > arraySize) ? arraySize + 2 - sharedArraySize : i;
+
+    // Index for the flatted out 2D array.
+    int globalIndex = (arraySize + 2) * i + j;
+    
+    // if (threadIdx.x == 0) {
+    //     printf("block id %d, i %d, j %d, globalIndex %d\n", blockIdx.x, i, j, globalIndex);
+    // }
 
     int stride = blockDim.x;
+    sharedArraySize -= 2;
 
-    for (int i = 0; i < blockDim.x * MOMENTS_PER_THREAD; i = i + stride) {
+    for (int k = 0; k < blockDim.x * momentsPerThread; k = k + stride) {
+        
+        int index_2d = threadIdx.x + k;
 
-        // This is the unique value that every thread in every block gets. This value represents the index of the NxN array
-        // of the moment to ble calculated. This index does not take in to acount the wrapping lines (See initializeArray function for the wrapping system)
-        int index_2d = blockIdx.x * blockDim.x * MOMENTS_PER_THREAD + threadIdx.x + i;
+        int index = globalIndex + arraySize + 3 + index_2d + (index_2d / sharedArraySize) * (2 + arraySize - sharedArraySize);
+        
+        // printf("block id %d, t_id %d , index %d, globalIndex %d\n", blockIdx.x, threadIdx.x, index, globalIndex);
+        
+        if (index <= globalIndex + sharedArraySize * (arraySize + 2) + sharedArraySize){
 
-        /**
-        * Index for the flatted out 2D array. The array passed in the GPU memory is 1D and already has the wrappings included.
-        * To find the corespondance of the 2D index to the 1D index we do the following. The first size + 3 (size = N) elements of the array
-        * are elements from the wrapping rows and columns. After that the index_2d is added and finaly index_2d / size calculates the line of the
-        * element on the 2D array. For every line we need to add 2 because the first and last element of the array are there for wrapping
-        */
-        int index = size + 3 + index_2d + (index_2d / size) * 2;
+            int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (sharedArraySize + 2)] + d_read[index + (sharedArraySize + 2)] + d_read[index]; 
 
-        if (index <= (size + 1) * (size  + 2) - 2){
-            // printf("block id %d, t_id %d , index %d\n", blockIdx.x, threadIdx.x, index);
-
-            // Sum all the neighbours. The index - (size + 2) is the above element index + (size + 2) is the below element. The 2 factor is added 
-            // Because the array with the wrappings is 2 rows bigger that the initial row
-            int sum = d_read[index - 1] + d_read[index + 1] + d_read[index - (size + 2)] + d_read[index + (size + 2)] + d_read[index];
-
+            // printf("blockId: %d, threadId: %d, index: %d, global index: %d\n", blockIdx.x, threadIdx.x, index, newIndex);
             d_write[index] = sign(sum);  // Update the value of this moment
 
         } else {
@@ -238,7 +255,7 @@ __global__ void detectStableState(short int *d_out, short int *arr, int arr_size
     for (int i = gthIdx; i < arr_size; i += gridSize)
         sum += arr[i];
     
-    __shared__ int shArr[BLK_SIZE];
+    __shared__ int shArr[BLK_THREADS];
     shArr[thIdx] = sum;
 
     __syncthreads();
@@ -254,6 +271,103 @@ __global__ void detectStableState(short int *d_out, short int *arr, int arr_size
     if (thIdx == 0)
         d_out[blockIdx.x] = shArr[0];
     
+}
+
+
+/**
+ * @brief 
+ * 
+ * @param size 
+ * @param block 
+ * @return int 
+ */
+int optimalBlockSize(int size, int block){
+    int fit = block;
+    
+    int initialBlock = block;
+    
+    int optimalFit = fit;
+    int optimalBlock = block;
+    
+    while (fit != 0 && block >= initialBlock - 20){
+        
+        fit = block - size % block;
+        
+        if (fit == block){
+            fit = 0;
+        }
+        
+        if (fit < optimalFit){
+            optimalFit = fit;
+            optimalBlock = block;
+        }
+        
+        // printf("size: %d, block: %d, fit: %d\n", size, block, fit);
+        
+        block -= 1;
+    }
+    
+    return optimalBlock;
+}
+
+
+int calculateGrid(int *nSimBlocks, int *momentsPerThread, int *blockSize, int arraySize){
+
+    // This is the minimum number of blocks the GPU needs to be 100% utilized. The formula is (Cores per SM div Block size) * Number of SMs 
+    int minBlocks = SM_CORES / BLK_THREADS * SM;
+    int sharedArraySize;
+
+    // This is the number of the maximum number of moments a block can have based on the amount of shared memory
+    int maxMomentsPerBlock = MAX_BLK_SIZE * MAX_BLK_SIZE;
+
+    // This is the minimum total number of moments needed to utilize fully both the shared memory and the CUDA cores of the GPU
+    int minTotalMoments = minBlocks * maxMomentsPerBlock;
+
+    // For arrays bigger that minTotalMoments we calculate the block size based on the MAX_BLK_SIZE. This ensures maximum shared memory efficiency
+    // since we need to open more blocks than the GPU can run at once.
+    if (arraySize * arraySize >= minTotalMoments){
+        
+        sharedArraySize = optimalBlockSize(arraySize, MAX_BLK_SIZE);  // The best block size for minimal overlap. This is the size without the wrapping lines
+
+        // If the array size is not divided exactly with the block size the last blocks will overlap.
+        // This will result on some moments being calculated twice but the number of them will be very small
+        // compared with the total moments (less that 1.8%) given a big array.
+        *nSimBlocks = arraySize % sharedArraySize == 0 ? arraySize / sharedArraySize : arraySize / sharedArraySize + 1;
+
+        // *nSimBlocks = (*nSimBlocks) * (*nSimBlocks);
+
+        // The number of moments each thread will calculate. The number of threads per blocks is constant
+        *momentsPerThread = (sharedArraySize * sharedArraySize) % BLK_THREADS == 0 ? (sharedArraySize * sharedArraySize) / BLK_THREADS : (sharedArraySize * sharedArraySize) / BLK_THREADS + 1;
+
+        *blockSize = BLK_THREADS;
+
+        sharedArraySize += 2;  // Add 2 to the sharedArraySize so that it contains the wrapping lines
+
+    } else {
+        // If the total number of moments is less than the minimum we will not need all of the shared memory.
+        // In this case we will open the minimum number of blocks that can utilize the GPU fully in terms of cores
+        
+        // The targeted sharedArraySize
+        sharedArraySize = arraySize % 8 == 0 ? arraySize / 8 : arraySize / 8 + 1;
+
+        if (sharedArraySize >= 1){
+        
+            // If the array size is not divided exactly with the block size the last blocks will overlap.
+            // This will result on some moments beign calculated twice but the number of them will be very small
+            // compared with the total moments (less that 1.8%) given a big array.
+            *nSimBlocks = 8;
+
+            // The number of moments each thread will calculate. The number of threads per blocks is constant
+            *momentsPerThread = (sharedArraySize * sharedArraySize) % BLK_THREADS == 0 ? (sharedArraySize * sharedArraySize) / BLK_THREADS : (sharedArraySize * sharedArraySize) / BLK_THREADS + 1;
+
+            
+            *blockSize = sharedArraySize * sharedArraySize;
+        }
+
+        sharedArraySize += 2;  // Add 2 to the sharedArraySize so that it contains the wrapping lines
+    }
+
+    return sharedArraySize;
 }
 
 
@@ -317,11 +431,8 @@ int main(int argc, char **argv){
     printf("Host -> Device time:  %3.1f ms \n\n", time);
 
     cudaEventRecord(start, 0);
-    
-    int totalThreads = (N * N) % MOMENTS_PER_THREAD == 0 ? (N * N) / MOMENTS_PER_THREAD : (N * N) / MOMENTS_PER_THREAD + 1; 
 
-    int numberOfBlocks = totalThreads % BLK_SIZE == 0 ? totalThreads / BLK_SIZE : totalThreads / BLK_SIZE + 1;
-    int stabilityBlocks = (N * N % BLK_SIZE) ? (N * N / BLK_SIZE + 1) : N * N / BLK_SIZE;
+    int stabilityBlocks = (N * N % BLK_THREADS) ? (N * N / BLK_THREADS + 1) : N * N / BLK_THREADS;
 
     // Unified memory pointer for detecting stable state
     int *stable_state;
@@ -335,6 +446,14 @@ int main(int argc, char **argv){
     short int* dev_out;
     cudaMallocManaged((void **)&dev_out, sizeof(short int) * stabilityBlocks);
 
+    int nSimBlocks;
+    int momentsPerThread;
+    int blockSize;
+    
+    int sharedArraySize = calculateGrid(&nSimBlocks, &momentsPerThread, &blockSize, N);
+
+    printf("Number of blocks: %d, block size: %d, moments per thread: %d, shared array size: %d\n", nSimBlocks, blockSize, momentsPerThread, sharedArraySize);
+
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&time, start, stop);
@@ -343,18 +462,17 @@ int main(int argc, char **argv){
     
     cudaEventRecord(start, 0);
 
-    for (int iteration = 0; iteration < N_ITER; iteration++){
+    for (int iteration = 0; iteration < ITERATIONS; iteration++){
 
-        numberOfBlocks = totalThreads % BLK_SIZE == 0 ? totalThreads / BLK_SIZE : totalThreads / BLK_SIZE + 1;
         // Call the kernel with numberOfBlocks blocks and N_threads. This call introduces a restriction on the size of the array
         // The max number of threads per block is 1024 so the max N is theoretically 32 (practically 30 because of the wrappings)
-        simulateIsing <<<numberOfBlocks, BLK_SIZE>>> (d_array1, d_array2, N);
+        simulateIsing <<< nSimBlocks * nSimBlocks, blockSize >>> (N,  sharedArraySize, d_array1, d_array2, nSimBlocks, momentsPerThread);
 
         cudaDeviceSynchronize();
 
-        int wrappingBlocks = (N % BLK_SIZE) ? (N / BLK_SIZE + 1) : N / BLK_SIZE;
+        int wrappingBlocks = (N % BLK_THREADS) ? (N / BLK_THREADS + 1) : N / BLK_THREADS;
 
-        completeWrapping <<<wrappingBlocks, BLK_SIZE>>> (d_array2, N);
+        completeWrapping <<<wrappingBlocks, BLK_THREADS>>> (d_array2, N);
         cudaDeviceSynchronize();
 
         // UNCOMMENT for debug prints
@@ -365,9 +483,9 @@ int main(int argc, char **argv){
 
         // UCOMMENT to stop the sim once a stable state is reached
 
-        // detectStableState <<<stabilityBlocks, BLK_SIZE>>> (dev_out, d_array2, (N + 2) * (N + 2));
+        // detectStableState <<<stabilityBlocks, BLK_THREADS>>> (dev_out, d_array2, (N + 2) * (N + 2));
 
-        // detectStableState <<<1, BLK_SIZE>>> (dev_out, dev_out, stabilityBlocks);
+        // detectStableState <<<1, BLK_THREADS>>> (dev_out, dev_out, stabilityBlocks);
         // cudaDeviceSynchronize();
 
         // stable_state[iteration % 3] = dev_out[0];

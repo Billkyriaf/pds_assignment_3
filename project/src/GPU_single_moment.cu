@@ -5,9 +5,9 @@
 #include <limits.h>
 #include <cuda.h>
 
-#define N 20000  // The size of the initial array (N * N moments)
-#define N_THREADS 1024  // Number of threads per block
-#define N_ITER 10  // The number of iterations
+#define N 10000  // The size of the initial array (N * N moments)
+#define N_THREADS 16  // Number of threads per block
+#define N_ITER 50  // The number of iterations
 
 /**
  * Initializes the array and defines its initial uniform random initial state. Our array contains two states either 1 or -1 (atomic "spins").
@@ -357,6 +357,7 @@ int main(int argc, char **argv){
         numberOfBlocks = (N * N) / N_THREADS + 1;
     }
 
+    printf("blocks: %d\n", numberOfBlocks);
     // Unified memory pointer for detecting stable state
     int *stable_state;
     cudaMallocManaged((void **) &stable_state, 3 * sizeof(int));  // Allocate pointer for device and host access (unified memory)
@@ -386,10 +387,10 @@ int main(int argc, char **argv){
         simulateIsing <<<numberOfBlocks, N_THREADS>>> (d_array1, d_array2, N);
         cudaDeviceSynchronize();
 
-        numberOfBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
-
+        int wrappingBlocks = (N % N_THREADS) ? (N / N_THREADS + 1) : N / N_THREADS;
+        
         // Complete the wrapping lines for the array that was just calculated
-        completeWrapping <<<numberOfBlocks, N_THREADS>>> (d_array2, N);
+        completeWrapping <<<wrappingBlocks, N_THREADS>>> (d_array2, N);
         cudaDeviceSynchronize();
 
         // UNCOMMENT for debug prints
